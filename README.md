@@ -34,7 +34,7 @@ actually use.
 No npm package, no npx. You clone the repo and the bins run from it.
 
 ```bash
-git clone <this-repo-url> && cd subagent-clis
+git clone https://github.com/liminal-ai/subagent-clis.git && cd subagent-clis
 ```
 
 Then fire up your coding agent of choice (Claude Code, Codex, whatever) inside
