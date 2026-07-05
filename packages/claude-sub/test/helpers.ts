@@ -26,6 +26,7 @@ export function runCli(
   env: Record<string, string> = {},
   cwd: string = packageRoot,
   stdin?: string,
+  timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   let i = 0;
   while (i < args.length && args[i] === "--dir") {
@@ -58,8 +59,17 @@ export function runCli(
     child.stderr.on("data", (c) => {
       stderr += c.toString();
     });
+    const timeout =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => child.kill("SIGTERM"), timeoutMs);
     child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
+    child.on("close", (code) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve({ stdout, stderr, code });
+    });
     if (stdin !== undefined) {
       child.stdin.write(stdin);
     }

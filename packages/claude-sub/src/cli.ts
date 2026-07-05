@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { generateRunId, getSessionsRoot, getSessionDir } from "./paths.js";
@@ -10,6 +10,7 @@ import { claudeExists, runSession, spawnDetachedRunner } from "./runner.js";
 import {
   countStreamEvents,
   ensureSessionDir,
+  getPid,
   getLastEventTs,
   isSessionRunning,
   readAssistantMessages,
@@ -40,6 +41,8 @@ interface GlobalOpts {
   dir?: string;
 }
 
+const RUNNER_START_GRACE_MS = 5_000;
+
 function sessionsRoot(opts: GlobalOpts): string {
   return getSessionsRoot(opts.dir);
 }
@@ -57,6 +60,10 @@ function printJsonl(items: unknown[]): void {
 function printErrorJson(message: string, extra?: Record<string, unknown>): never {
   printJson({ error: message, ...extra });
   process.exit(1);
+}
+
+function printStderrErrorJson(message: string, extra?: Record<string, unknown>): void {
+  process.stderr.write(JSON.stringify({ error: message, ...extra }) + "\n");
 }
 
 function finishExec(envelope: Envelope, text: boolean): never {
@@ -141,7 +148,10 @@ async function requirePrompt(commandName: "exec" | "start"): Promise<string> {
 async function waitForEnvelope(
   sessionDir: string,
   timeoutSec?: number,
-): Promise<{ done: true; envelope: NonNullable<Awaited<ReturnType<typeof readEnvelope>>> } | { done: false }> {
+): Promise<
+  | { done: true; envelope: NonNullable<Awaited<ReturnType<typeof readEnvelope>>> }
+  | { done: false; reason: "dead" | "timeout" }
+> {
   const deadline =
     timeoutSec !== undefined ? Date.now() + timeoutSec * 1000 : undefined;
 
@@ -150,10 +160,31 @@ async function waitForEnvelope(
     if (envelope) {
       return { done: true, envelope };
     }
+    const running = await isSessionRunning(sessionDir);
+    if (!running) {
+      const pid = await getPid(sessionDir);
+      if (pid !== null || !(await isSessionStillStarting(sessionDir))) {
+        return { done: false, reason: "dead" };
+      }
+    }
     if (deadline !== undefined && Date.now() >= deadline) {
-      return { done: false };
+      return { done: false, reason: "timeout" };
     }
     await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+async function isSessionStillStarting(sessionDir: string): Promise<boolean> {
+  try {
+    const meta = await stat(join(sessionDir, "meta.json"));
+    return Date.now() - meta.mtimeMs < RUNNER_START_GRACE_MS;
+  } catch {
+    try {
+      const dir = await stat(sessionDir);
+      return Date.now() - dir.mtimeMs < RUNNER_START_GRACE_MS;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -273,12 +304,12 @@ program
     if (cmdOpts.wait) {
       const waited = await waitForEnvelope(sessionDir, cmdOpts.timeout);
       if (!waited.done) {
-        if (cmdOpts.timeout !== undefined) {
+        if (waited.reason === "timeout") {
           printJson({ error: "timeout", running: true });
           process.exit(4);
         }
-        printJson({ running: true });
-        process.exit(3);
+        printStderrErrorJson("envelope not found");
+        process.exit(2);
       }
       finishResult(waited.envelope);
     }

@@ -18,7 +18,6 @@ import {
   appendRawLine,
   appendStreamLine,
   ensureSessionDir,
-  readEnvelope,
   writeEnvelope,
   writeMeta,
   writePid,
@@ -36,12 +35,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export async function claudeExists(): Promise<boolean> {
   const bin = process.env.CLAUDE_BIN ?? "claude";
   if (process.env.CLAUDE_BIN) {
-    try {
-      await access(bin, constants.F_OK);
-      return true;
-    } catch {
-      return false;
-    }
+    return true;
   }
   try {
     await access(bin, constants.X_OK);
@@ -126,19 +120,40 @@ export async function runSession(params: {
   let lineBuffer = "";
   let stdoutQueue: Promise<void> = Promise.resolve();
   let agentChild: ChildProcess | null = null;
-  let finalized = false;
+  let finalizePromise: Promise<Envelope> | null = null;
   let stderrStream: ReturnType<typeof createWriteStream> | null = null;
 
-  const finalize = async (
-    code: number,
-    stopped = false,
-  ): Promise<Envelope> => {
-    if (finalized) {
-      return (await readEnvelope(sessionDir))!;
+  const errorMessage = (err: unknown): string =>
+    err instanceof Error ? err.message : String(err);
+
+  const writeStderr = (chunk: string | Buffer): void => {
+    if (!stderrStream || stderrStream.destroyed || stderrStream.writableEnded) {
+      return;
     }
-    finalized = true;
-    await stdoutQueue;
-    stderrStream?.end();
+    stderrStream.write(chunk);
+  };
+
+  const closeStderr = async (): Promise<void> => {
+    const stream = stderrStream;
+    if (!stream || stream.destroyed || stream.writableFinished) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      stream.once("finish", resolve);
+      stream.once("error", () => resolve());
+      if (!stream.writableEnded) {
+        stream.end();
+      }
+    });
+  };
+
+  const doFinalize = async (code: number, stopped = false): Promise<Envelope> => {
+    try {
+      await stdoutQueue;
+    } catch (err) {
+      writeStderr(`\n${errorMessage(err)}\n`);
+    }
+    await closeStderr();
     const endedAt = new Date().toISOString();
     const stderrTail = await tailStderr(sessionDir);
     const envelope = buildEnvelope({
@@ -161,97 +176,92 @@ export async function runSession(params: {
     return envelope;
   };
 
+  const finalize = (code: number, stopped = false): Promise<Envelope> => {
+    finalizePromise ??= doFinalize(code, stopped);
+    return finalizePromise;
+  };
+
   process.once("SIGTERM", () => {
     agentChild?.kill("SIGTERM");
     void finalize(1, true).then(() => process.exit(2));
   });
 
-  await ensureSessionDir(sessionDir);
-  await writePid(sessionDir, process.pid);
-  await writeMeta(
-    sessionDir,
-    buildMeta({
-      runId,
-      cwd,
-      model,
-      argv,
-      prompt,
-      startedAt,
-    }),
-  );
-
-  const { command, argv: claudeArgv } = resolveClaudeSpawn(execArgs, prompt);
-  stderrStream = createWriteStream(paths.stderr, { flags: "w" });
-
   const enqueueLine = (line: string): void => {
     stdoutQueue = stdoutQueue.then(() => processRawLine(sessionDir, line, state));
   };
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, claudeArgv, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        TERM: "dumb",
-        NO_COLOR: "1",
-        CLICOLOR: "0",
-        FORCE_COLOR: "0",
-      },
-    });
-    agentChild = child;
+  try {
+    await ensureSessionDir(sessionDir);
+    await writePid(sessionDir, process.pid);
+    await writeMeta(
+      sessionDir,
+      buildMeta({
+        runId,
+        cwd,
+        model,
+        argv,
+        prompt,
+        startedAt,
+      }),
+    );
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString("utf8");
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.trim()) {
-          enqueueLine(line);
+    const { command, argv: claudeArgv } = resolveClaudeSpawn(execArgs, prompt);
+    stderrStream = createWriteStream(paths.stderr, { flags: "a" });
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, claudeArgv, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          TERM: "dumb",
+          NO_COLOR: "1",
+          CLICOLOR: "0",
+          FORCE_COLOR: "0",
+        },
+      });
+      agentChild = child;
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        lineBuffer += chunk.toString("utf8");
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) {
+            enqueueLine(line);
+          }
         }
-      }
+      });
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        writeStderr(chunk);
+      });
+
+      child.on("error", reject);
+
+      child.on("close", (code) => {
+        if (finalizePromise) {
+          return;
+        }
+        if (lineBuffer.trim()) {
+          enqueueLine(lineBuffer);
+        }
+        stdoutQueue
+          .then(() => {
+            exitCode = code ?? 1;
+            resolve();
+          })
+          .catch(reject);
+      });
     });
 
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderrStream!.write(chunk);
-    });
-
-    child.on("error", (err) => {
-      stderrStream!.end();
-      reject(err);
-    });
-
-    child.on("close", (code) => {
-      if (finalized) {
-        return;
-      }
-      if (lineBuffer.trim()) {
-        enqueueLine(lineBuffer);
-      }
-      stdoutQueue
-        .then(() => {
-          exitCode = code ?? 1;
-          stderrStream!.end();
-          resolve();
-        })
-        .catch(reject);
-    });
-  }).catch((err: Error) => {
-    if (finalized) {
-      return;
-    }
+    await stdoutQueue;
+    return finalize(exitCode);
+  } catch (err) {
     exitCode = 1;
-    stderrStream!.write(`\n${err.message}\n`);
-    stderrStream!.end();
-  });
-
-  if (finalized) {
-    return (await readEnvelope(sessionDir))!;
+    writeStderr(`\n${errorMessage(err)}\n`);
+    return finalize(exitCode);
   }
-
-  await stdoutQueue;
-
-  return finalize(exitCode);
 }
 
 export async function spawnDetachedRunner(params: {

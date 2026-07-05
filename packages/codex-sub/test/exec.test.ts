@@ -70,4 +70,30 @@ describe("exec", () => {
       expect(stderr.trim()).toBe("simulated backend failure");
     });
   });
+
+  it("writes an error envelope when backend spawn fails", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const missingBin = join(sessionsRoot, "missing-codex");
+      const { stdout, stderr, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "spawn failure"],
+        {
+          CODEX_SUB_HOME: sessionsRoot,
+          CODEX_BIN: missingBin,
+        },
+      );
+
+      expect(code).toBe(2);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.status).toBe("error");
+      expect(envelope.exit_code).not.toBe(0);
+      expect(envelope.error).toContain("ENOENT");
+      expect(stderr).toContain("ENOENT");
+      expect(stderr).not.toContain("    at ");
+
+      const onDisk = JSON.parse(
+        await readFile(join(sessionsRoot, envelope.run_id, "envelope.json"), "utf8"),
+      );
+      expect(onDisk).toEqual(envelope);
+    });
+  });
 });

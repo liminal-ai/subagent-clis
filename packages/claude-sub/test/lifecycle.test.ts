@@ -1,7 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { runCli, withTempSessions, waitForEnvelope } from "./helpers.js";
+import { runCli, withTempSessions, waitForEnvelope, waitForRunning } from "./helpers.js";
+
+const sleepStub = join(import.meta.dirname, "fixtures", "stub-claude-sleep.mjs");
+
+async function exitedPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", ""]);
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error("failed to spawn short-lived process");
+  }
+  await new Promise<void>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", () => resolve());
+  });
+  return pid;
+}
 
 describe("start/status/result lifecycle", () => {
   it("runs detached and completes", async () => {
@@ -75,6 +91,81 @@ describe("start/status/result lifecycle", () => {
       expect(result.code).toBe(0);
       const envelope = JSON.parse(result.stdout.trim());
       expect(envelope.status).toBe("ok");
+    });
+  });
+
+  it("start writes an error envelope when backend spawn fails", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const missingBin = join(sessionsRoot, "missing-claude");
+      const env = {
+        CLAUDE_SUB_HOME: sessionsRoot,
+        CLAUDE_BIN: missingBin,
+      };
+      const start = await runCli(
+        ["--dir", sessionsRoot, "start", "spawn failure"],
+        env,
+      );
+      expect(start.code).toBe(0);
+      const started = JSON.parse(start.stdout.trim());
+
+      await waitForEnvelope(sessionsRoot, started.run_id);
+
+      const envelope = JSON.parse(
+        await readFile(join(sessionsRoot, started.run_id, "envelope.json"), "utf8"),
+      );
+      expect(envelope.status).toBe("error");
+      expect(envelope.exit_code).not.toBe(0);
+      expect(envelope.error).toContain("ENOENT");
+    });
+  });
+
+  it("result --wait exits 2 when the runner died without an envelope", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const runId = "dead-runner";
+      const sessionDir = join(sessionsRoot, runId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(sessionDir, "meta.json"), "{}\n");
+      await writeFile(join(sessionDir, "pid"), String(await exitedPid()));
+
+      const result = await runCli(
+        ["--dir", sessionsRoot, "result", runId, "--wait"],
+        { CLAUDE_SUB_HOME: sessionsRoot },
+        undefined,
+        undefined,
+        3_000,
+      );
+
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(JSON.parse(result.stderr.trim())).toEqual({
+        error: "envelope not found",
+      });
+    });
+  });
+
+  it("result --wait --timeout exits 4 while the runner is still running", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const env = {
+        CLAUDE_SUB_HOME: sessionsRoot,
+        CLAUDE_BIN: sleepStub,
+      };
+      const start = await runCli(["--dir", sessionsRoot, "start", "sleep"], env);
+      expect(start.code).toBe(0);
+      const started = JSON.parse(start.stdout.trim());
+      await waitForRunning(sessionsRoot, started.run_id, env);
+
+      const result = await runCli(
+        ["--dir", sessionsRoot, "result", started.run_id, "--wait", "--timeout", "1"],
+        env,
+      );
+
+      expect(result.code).toBe(4);
+      expect(JSON.parse(result.stdout.trim())).toEqual({
+        error: "timeout",
+        running: true,
+      });
+
+      await runCli(["--dir", sessionsRoot, "stop", started.run_id], env);
     });
   });
 
