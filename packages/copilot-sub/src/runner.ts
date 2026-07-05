@@ -1,0 +1,334 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { createWriteStream } from "node:fs";
+import { open, writeFile } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
+import { buildCopilotExecArgs, buildCopilotArgv, extractModelFromArgs } from "./args.js";
+import {
+  createStreamState,
+  mapRawEvent,
+  sanitizeJsonLine,
+  type StreamState,
+} from "./stream-mapper.js";
+import { buildEnvelope, buildMeta } from "./envelope.js";
+import {
+  appendRawLine,
+  appendStreamLine,
+  ensureSessionDir,
+  writeEnvelope,
+  writeMeta,
+  writePid,
+  tailStderr,
+} from "./session.js";
+import { sessionFilePaths } from "./paths.js";
+import {
+  PROMPT_ARGV_HANDOFF_THRESHOLD,
+  PROMPT_HANDOFF_FILE,
+} from "./prompt.js";
+import type { Envelope } from "./envelope.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+async function overrideBinExecutable(bin: string): Promise<boolean> {
+  try {
+    const info = await stat(bin);
+    if (info.isDirectory()) {
+      return false;
+    }
+    if (bin.endsWith(".mjs") || bin.endsWith(".js")) {
+      if (!info.isFile()) {
+        return false;
+      }
+      await access(bin, constants.R_OK);
+      return true;
+    }
+    if (!info.isFile()) {
+      return false;
+    }
+    await access(bin, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandOnPath(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("sh", ["-c", `command -v ${bin}`], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.on("close", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}
+
+export async function copilotExists(): Promise<boolean> {
+  const bin = process.env.COPILOT_BIN ?? "copilot";
+  if (process.env.COPILOT_BIN) {
+    return overrideBinExecutable(bin);
+  }
+  return commandOnPath(bin);
+}
+
+function resolveCopilotSpawn(
+  execArgs: string[],
+): { command: string; argv: string[] } {
+  const bin = process.env.COPILOT_BIN ?? "copilot";
+  if (bin.endsWith(".mjs") || bin.endsWith(".js")) {
+    return { command: process.execPath, argv: [bin, ...execArgs] };
+  }
+  return { command: bin, argv: execArgs };
+}
+
+export function getCliPath(): string {
+  return join(__dirname, "cli.js");
+}
+
+async function processRawLine(
+  sessionDir: string,
+  line: string,
+  state: StreamState,
+): Promise<void> {
+  await appendRawLine(sessionDir, line);
+
+  const sanitized = sanitizeJsonLine(line);
+  if (!sanitized) {
+    return;
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(sanitized) as Record<string, unknown>;
+  } catch {
+    const ts = new Date().toISOString();
+    await appendStreamLine(sessionDir, {
+      t: "other",
+      raw_type: "parse_error",
+      data: { line: sanitized },
+      ts,
+    });
+    return;
+  }
+
+  const ts = new Date().toISOString();
+  const events = mapRawEvent(raw, ts, state);
+  for (const event of events) {
+    await appendStreamLine(sessionDir, event);
+  }
+}
+
+export async function runSession(params: {
+  sessionDir: string;
+  runId: string;
+  prompt: string;
+  passthrough: string[];
+  cwd?: string;
+}): Promise<Envelope> {
+  const { sessionDir, runId, prompt, passthrough } = params;
+  const cwd = params.cwd ?? process.cwd();
+  const startedAt = new Date().toISOString();
+  const paths = sessionFilePaths(sessionDir);
+  const execArgs = buildCopilotExecArgs(prompt, passthrough);
+  const argv = buildCopilotArgv(prompt, passthrough);
+  const model = extractModelFromArgs(execArgs);
+
+  const state = createStreamState();
+  state.model = model;
+  let exitCode = 0;
+  let lineBuffer = "";
+  let stdoutQueue: Promise<void> = Promise.resolve();
+  let agentChild: ChildProcess | null = null;
+  let finalizePromise: Promise<Envelope> | null = null;
+  let stderrStream: ReturnType<typeof createWriteStream> | null = null;
+
+  const errorMessage = (err: unknown): string =>
+    err instanceof Error ? err.message : String(err);
+
+  const writeStderr = (chunk: string | Buffer): void => {
+    if (!stderrStream || stderrStream.destroyed || stderrStream.writableEnded) {
+      return;
+    }
+    stderrStream.write(chunk);
+  };
+
+  const closeStderr = async (): Promise<void> => {
+    const stream = stderrStream;
+    if (!stream || stream.destroyed || stream.writableFinished) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      stream.once("finish", resolve);
+      stream.once("error", () => resolve());
+      if (!stream.writableEnded) {
+        stream.end();
+      }
+    });
+  };
+
+  const doFinalize = async (code: number, stopped = false): Promise<Envelope> => {
+    try {
+      await stdoutQueue;
+    } catch (err) {
+      writeStderr(`\n${errorMessage(err)}\n`);
+    }
+    await closeStderr();
+    const endedAt = new Date().toISOString();
+    const stderrTail = await tailStderr(sessionDir);
+    const envelope = buildEnvelope({
+      runId,
+      cwd,
+      startedAt,
+      endedAt,
+      exitCode: code,
+      state,
+      streamPath: paths.stream,
+      rawPath: paths.raw,
+      stderrPath: paths.stderr,
+      stderrTail: code !== 0 && !stopped ? stderrTail.slice(-2048) : undefined,
+    });
+    if (stopped) {
+      envelope.status = "error";
+      envelope.error = "run was stopped";
+    }
+    await writeEnvelope(sessionDir, envelope);
+    return envelope;
+  };
+
+  const finalize = (code: number, stopped = false): Promise<Envelope> => {
+    finalizePromise ??= doFinalize(code, stopped);
+    return finalizePromise;
+  };
+
+  process.once("SIGTERM", () => {
+    agentChild?.kill("SIGTERM");
+    void finalize(1, true).then(() => process.exit(2));
+  });
+
+  const enqueueLine = (line: string): void => {
+    stdoutQueue = stdoutQueue.then(() => processRawLine(sessionDir, line, state));
+  };
+
+  try {
+    await ensureSessionDir(sessionDir);
+    await writePid(sessionDir, process.pid);
+    await writeMeta(
+      sessionDir,
+      buildMeta({
+        runId,
+        cwd,
+        model,
+        argv,
+        prompt,
+        startedAt,
+      }),
+    );
+
+    const { command, argv: copilotArgv } = resolveCopilotSpawn(execArgs);
+    stderrStream = createWriteStream(paths.stderr, { flags: "a" });
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, copilotArgv, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          TERM: "dumb",
+          NO_COLOR: "1",
+          CLICOLOR: "0",
+          FORCE_COLOR: "0",
+        },
+      });
+      agentChild = child;
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        lineBuffer += chunk.toString("utf8");
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) {
+            enqueueLine(line);
+          }
+        }
+      });
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        writeStderr(chunk);
+      });
+
+      child.on("error", reject);
+
+      child.on("close", (code) => {
+        if (finalizePromise) {
+          return;
+        }
+        if (lineBuffer.trim()) {
+          enqueueLine(lineBuffer);
+        }
+        stdoutQueue
+          .then(() => {
+            exitCode = code ?? 1;
+            resolve();
+          })
+          .catch(reject);
+      });
+    });
+
+    await stdoutQueue;
+    return finalize(exitCode);
+  } catch (err) {
+    exitCode = 1;
+    writeStderr(`\n${errorMessage(err)}\n`);
+    return finalize(exitCode);
+  }
+}
+
+export async function spawnDetachedRunner(params: {
+  sessionDir: string;
+  runId: string;
+  prompt: string;
+  passthrough: string[];
+  cwd?: string;
+}): Promise<void> {
+  const cliPath = getCliPath();
+  const args = [
+    cliPath,
+    "_runner",
+    params.sessionDir,
+    "--run-id",
+    params.runId,
+  ];
+
+  const handoffViaFile = params.prompt.length > PROMPT_ARGV_HANDOFF_THRESHOLD;
+  if (handoffViaFile) {
+    const promptPath = join(params.sessionDir, PROMPT_HANDOFF_FILE);
+    await writeFile(promptPath, params.prompt, "utf8");
+    args.push("--prompt-file", promptPath);
+  } else {
+    args.push("--prompt", params.prompt);
+  }
+
+  if (params.cwd) {
+    args.push("--cwd", params.cwd);
+  }
+
+  if (params.passthrough.length > 0) {
+    args.push(...params.passthrough);
+  }
+
+  const stderrPath = sessionFilePaths(params.sessionDir).stderr;
+  const stderrHandle = await open(stderrPath, "w");
+
+  const child = spawn(process.execPath, args, {
+    detached: true,
+    stdio: ["ignore", "ignore", stderrHandle.fd],
+    cwd: params.cwd ?? process.cwd(),
+    env: process.env,
+  });
+
+  await stderrHandle.close();
+
+  child.unref();
+}

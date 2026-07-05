@@ -1,0 +1,27 @@
+{
+  "name": "copilot-sub",
+  "version": "0.1.0",
+  "description": "Thin CLI wrapper around Copilot with a documented file substrate",
+  "type": "module",
+  "bin": {
+    "copilot-subagent": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  }
+}
