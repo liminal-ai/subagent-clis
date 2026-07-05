@@ -9,7 +9,7 @@ describe("exec", () => {
   it("writes a correct envelope", async () => {
     await withTempSessions(async (sessionsRoot) => {
       const { stdout, code } = await runCli(
-        ["--dir", sessionsRoot, "exec", "test prompt"],
+        ["--dir", sessionsRoot, "exec", "test prompt", "-m", "gpt-5.5"],
         { CODEX_SUB_HOME: sessionsRoot },
       );
 
@@ -20,7 +20,7 @@ describe("exec", () => {
       expect(envelope.status).toBe("ok");
       expect(envelope.exit_code).toBe(0);
       expect(envelope.session_id).toBe("codex-thread-abc123");
-      expect(envelope.model).toBeNull();
+      expect(envelope.model).toBe("gpt-5.5");
       expect(envelope.result).toBe("Done! Here is the result.");
       expect(envelope.usage).toEqual({
         input_tokens: 100,
@@ -38,6 +38,19 @@ describe("exec", () => {
         const evt = JSON.parse(line);
         expect(evt.ts).toBeTruthy();
       }
+    });
+  });
+
+  it("leaves envelope.model null when -m is not passed", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "test prompt"],
+        { CODEX_SUB_HOME: sessionsRoot },
+      );
+
+      expect(code).toBe(0);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.model).toBeNull();
     });
   });
 

@@ -37,7 +37,7 @@ ENVELOPE (envelope.json / exec / result stdout)
   backend          "codex"
   run_id           this CLI run's id
   session_id       thread_id from thread.started event, or null
-  model            from -m passthrough if supplied, or null (config.toml otherwise)
+  model            from -m/--model passthrough if supplied, else null (config.toml default is not reported)
   cwd              working directory
   status           "ok" | "error"  ("error" when exit_code !== 0)
   exit_code        codex process exit code
@@ -50,7 +50,7 @@ ENVELOPE (envelope.json / exec / result stdout)
   raw_path         absolute path to raw.jsonl
   stderr_path      absolute path to stderr.log
   error            optional string, last 2KB of stderr on failure
-  model note: usually null — codex events don't announce the config-default model, so it is populated only when the caller passes -m/--model.
+  model note: populated only when the caller passes -m/--model. The codex --json stream does not report the configured default model, so envelope.model is null otherwise.
 
 EXIT CODES
   0  success

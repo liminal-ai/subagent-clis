@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { runCli, withTempSessions } from "./helpers.js";
 
 const failStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-fail.mjs");
+const isErrorStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-is-error.mjs");
 
 describe("exec", () => {
   beforeAll(() => {
@@ -51,6 +52,24 @@ describe("exec", () => {
       );
       expect(code).toBe(0);
       expect(stdout.trim()).toBe("Done! Here is the result.");
+    });
+  });
+
+  it("reports error status and exit 2 when result is_error is true but backend exits 0", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "fail internally"],
+        {
+          CURSOR_SUB_HOME: sessionsRoot,
+          CURSOR_AGENT_BIN: isErrorStub,
+        },
+      );
+
+      expect(code).toBe(2);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.status).toBe("error");
+      expect(envelope.exit_code).toBe(0);
+      expect(envelope.result).toBe("Something went wrong internally.");
     });
   });
 

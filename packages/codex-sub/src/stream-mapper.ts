@@ -53,6 +53,21 @@ function itemRecord(raw: Record<string, unknown>): Record<string, unknown> | und
   return raw.item as Record<string, unknown> | undefined;
 }
 
+function captureStreamModel(raw: Record<string, unknown>, state: StreamState): void {
+  const topLevel = raw.model;
+  if (typeof topLevel === "string" && topLevel) {
+    state.model = topLevel;
+    return;
+  }
+  for (const key of ["config", "configuration"] as const) {
+    const nested = raw[key] as Record<string, unknown> | undefined;
+    if (nested && typeof nested.model === "string" && nested.model) {
+      state.model = nested.model;
+      return;
+    }
+  }
+}
+
 export function mapRawEvent(
   raw: Record<string, unknown>,
   ts: string,
@@ -61,11 +76,18 @@ export function mapRawEvent(
   const type = raw.type as string | undefined;
   const events: CanonicalEvent[] = [];
 
+  if (type === "session.created") {
+    captureStreamModel(raw, state);
+    events.push({ t: "other", raw_type: "session.created", data: raw, ts });
+    return events;
+  }
+
   if (type === "thread.started") {
     const threadId = raw.thread_id as string | undefined;
     if (threadId) {
       state.sessionId = threadId;
     }
+    captureStreamModel(raw, state);
     events.push({
       t: "lifecycle",
       event: "start",

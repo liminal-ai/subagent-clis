@@ -23,6 +23,7 @@ export interface StreamState {
   usage: Record<string, unknown> | null;
   lastAssistantText: string;
   assistantMessages: string[];
+  isError: boolean;
 }
 
 export function createStreamState(): StreamState {
@@ -32,6 +33,7 @@ export function createStreamState(): StreamState {
     usage: null,
     lastAssistantText: "",
     assistantMessages: [],
+    isError: false,
   };
 }
 
@@ -205,6 +207,7 @@ export function mapRawEvent(
 
   if (type === "result") {
     state.sessionId = (raw.session_id as string | undefined) ?? state.sessionId;
+    state.isError = raw.is_error === true;
     const usage = (raw.usage as Record<string, unknown> | undefined) ?? {};
     state.usage = usage;
     events.push({ t: "usage", data: usage, ts });
@@ -213,7 +216,7 @@ export function mapRawEvent(
       event: "end",
       data: {
         session_id: state.sessionId,
-        is_error: raw.is_error ?? false,
+        is_error: state.isError,
       },
       ts,
     });

@@ -141,14 +141,39 @@ export function mapRawEvent(
           ts,
           ...(id ? { call_id: id } : {}),
         });
+      } else {
+        events.push({
+          t: "other",
+          raw_type: `assistant/${(block.type as string | undefined) ?? "unknown"}`,
+          data: block,
+          ts,
+        });
       }
+    }
+    if (events.length === 0) {
+      events.push({
+        t: "other",
+        raw_type: rawTypeLabel(type, subtype),
+        data: raw,
+        ts,
+      });
     }
     return events;
   }
 
   if (type === "user") {
-    const message = raw.message as { content?: Array<Record<string, unknown>> } | undefined;
-    for (const block of message?.content ?? []) {
+    const message = raw.message as { content?: unknown } | undefined;
+    const content = message?.content;
+    if (typeof content === "string") {
+      events.push({
+        t: "other",
+        raw_type: "user/string_content",
+        data: raw,
+        ts,
+      });
+      return events;
+    }
+    for (const block of (content as Array<Record<string, unknown>> | undefined) ?? []) {
       if (block.type === "tool_result") {
         const toolUseId = block.tool_use_id as string | undefined;
         const name = (toolUseId && state.toolUseIdToName.get(toolUseId)) || "unknown";
@@ -164,7 +189,22 @@ export function mapRawEvent(
           ...(toolUseId ? { call_id: toolUseId } : {}),
           ...(truncated.truncated ? { truncated: true } : {}),
         });
+      } else {
+        events.push({
+          t: "other",
+          raw_type: `user/${(block.type as string | undefined) ?? "unknown"}`,
+          data: block,
+          ts,
+        });
       }
+    }
+    if (events.length === 0) {
+      events.push({
+        t: "other",
+        raw_type: rawTypeLabel(type, subtype),
+        data: raw,
+        ts,
+      });
     }
     return events;
   }

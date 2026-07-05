@@ -3,6 +3,7 @@ import {
   createStreamState,
   mapRawEvent,
 } from "../src/stream-mapper.js";
+import { buildEnvelope } from "../src/envelope.js";
 
 describe("canonical stream mapping", () => {
   it("maps canned cursor-agent events", () => {
@@ -91,5 +92,34 @@ describe("canonical stream mapping", () => {
     expect(other).toMatchObject({
       raw_type: "weird_unknown_event",
     });
+  });
+
+  it("sets envelope status error when result is_error is true even with exit 0", () => {
+    const state = createStreamState();
+    mapRawEvent(
+      {
+        type: "result",
+        session_id: "cursor-session-err",
+        is_error: true,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      "2026-07-01T12:00:00.000Z",
+      state,
+    );
+
+    const envelope = buildEnvelope({
+      runId: "run-1",
+      cwd: "/tmp",
+      startedAt: "2026-07-01T12:00:00.000Z",
+      endedAt: "2026-07-01T12:00:01.000Z",
+      exitCode: 0,
+      state,
+      streamPath: "/tmp/stream.jsonl",
+      rawPath: "/tmp/raw.jsonl",
+      stderrPath: "/tmp/stderr.log",
+    });
+
+    expect(envelope.status).toBe("error");
+    expect(envelope.exit_code).toBe(0);
   });
 });

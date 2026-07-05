@@ -162,7 +162,7 @@ export async function runSession(params: {
       startedAt,
       endedAt,
       exitCode: code,
-      state,
+      state: { ...state, model: state.model ?? model },
       streamPath: paths.stream,
       rawPath: paths.raw,
       stderrPath: paths.stderr,

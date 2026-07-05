@@ -203,4 +203,42 @@ describe("canonical stream mapping", () => {
     expect(envelope.result).toBe("Something went wrong");
     expect(envelope.usage?.total_cost_usd).toBe(0.01);
   });
+
+  it("maps user event with string content to other", () => {
+    const state = createStreamState();
+    const events = mapRawEvent(
+      { type: "user", message: { content: "hello from user" } },
+      "2026-07-01T12:00:00.000Z",
+      state,
+    );
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]).toMatchObject({
+      t: "other",
+      raw_type: "user/string_content",
+    });
+  });
+
+  it("maps assistant unknown block type to other", () => {
+    const state = createStreamState();
+    const events = mapRawEvent(
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "redacted_thinking",
+              data: "opaque",
+            },
+          ],
+        },
+      },
+      "2026-07-01T12:00:00.000Z",
+      state,
+    );
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]).toMatchObject({
+      t: "other",
+      raw_type: "assistant/redacted_thinking",
+    });
+  });
 });

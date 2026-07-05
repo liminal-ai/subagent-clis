@@ -39,7 +39,7 @@ ENVELOPE (envelope.json / exec / result stdout)
   session_id       cursor chat id from result event, or null
   model            from system/init event, or null
   cwd              working directory
-  status           "ok" | "error"  ("error" when exit_code !== 0)
+  status           "ok" | "error"  ("error" when exit_code !== 0 OR result is_error)
   exit_code        cursor-agent process exit code
   result           final assistant text (best-effort on error)
   usage            object from result event, verbatim, or null

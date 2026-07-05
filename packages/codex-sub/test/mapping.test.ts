@@ -3,6 +3,7 @@ import {
   createStreamState,
   mapRawEvent,
 } from "../src/stream-mapper.js";
+import { buildEnvelope } from "../src/envelope.js";
 
 describe("canonical stream mapping", () => {
   it("maps canned codex events", () => {
@@ -53,6 +54,7 @@ describe("canonical stream mapping", () => {
     }
 
     expect(state.sessionId).toBe("codex-thread-abc123");
+    expect(state.model).toBeNull();
     expect(state.lastAssistantText).toBe("Done! Here is the result.");
     expect(state.assistantMessages).toEqual([
       "Working on it...",
@@ -109,5 +111,36 @@ describe("canonical stream mapping", () => {
     expect(other).toMatchObject({
       raw_type: "weird_unknown_event",
     });
+  });
+
+  it("best-effort: captures model from a synthetic stream event if present", () => {
+    const state = createStreamState();
+    mapRawEvent(
+      { type: "session.created", model: "o3-mini" },
+      "2026-07-01T12:00:00.000Z",
+      state,
+    );
+    expect(state.model).toBe("o3-mini");
+  });
+
+  it("uses argv model in envelope when stream omits model", () => {
+    const state = createStreamState();
+    mapRawEvent(
+      { type: "thread.started", thread_id: "t-no-model" },
+      "2026-07-01T12:00:00.000Z",
+      state,
+    );
+    const envelope = buildEnvelope({
+      runId: "run-1",
+      cwd: "/tmp",
+      startedAt: "2026-07-01T12:00:00.000Z",
+      endedAt: "2026-07-01T12:00:01.000Z",
+      exitCode: 0,
+      state: { ...state, model: state.model ?? "gpt-4.1" },
+      streamPath: "/tmp/stream.jsonl",
+      rawPath: "/tmp/raw.jsonl",
+      stderrPath: "/tmp/stderr.log",
+    });
+    expect(envelope.model).toBe("gpt-4.1");
   });
 });

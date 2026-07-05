@@ -46,7 +46,7 @@ export function buildEnvelope(params: {
 }): Envelope {
   const durationMs =
     new Date(params.endedAt).getTime() - new Date(params.startedAt).getTime();
-  const failed = params.exitCode !== 0;
+  const failed = params.exitCode !== 0 || params.state.isError;
   const envelope: Envelope = {
     schema_version: SCHEMA_VERSION,
     backend: BACKEND,
