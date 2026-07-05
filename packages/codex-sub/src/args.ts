@@ -1,3 +1,22 @@
+export function validateResumePassthrough(passthrough: string[]): string | null {
+  for (let i = 0; i < passthrough.length; i++) {
+    const arg = passthrough[i]!;
+    if (arg === "--resume") {
+      const next = passthrough[i + 1];
+      if (next === undefined || next.startsWith("-")) {
+        return "--resume requires a session id";
+      }
+      continue;
+    }
+    if (arg.startsWith("--resume=")) {
+      if (!arg.slice("--resume=".length)) {
+        return "--resume requires a session id";
+      }
+    }
+  }
+  return null;
+}
+
 export function extractResumeSessionId(passthrough: string[]): {
   passthrough: string[];
   resumeSessionId?: string;

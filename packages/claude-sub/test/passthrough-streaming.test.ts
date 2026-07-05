@@ -68,6 +68,33 @@ describe("passthrough", () => {
       expect(meta.argv).toContain("plan");
     });
   });
+
+  it("keeps --dangerously-skip-permissions when append-system-prompt value looks like a flag", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { code } = await runCli(
+        [
+          "--dir",
+          sessionsRoot,
+          "exec",
+          "fix",
+          "--append-system-prompt",
+          "--permission-mode",
+        ],
+        { CLAUDE_SUB_HOME: sessionsRoot },
+      );
+      expect(code).toBe(0);
+
+      const entries = await readdir(sessionsRoot);
+      const runId = entries[0]!;
+      const meta = JSON.parse(
+        await readFile(join(sessionsRoot, runId, "meta.json"), "utf8"),
+      );
+
+      expect(meta.argv).toContain("--dangerously-skip-permissions");
+      expect(meta.argv).toContain("--append-system-prompt");
+      expect(meta.argv).toContain("--permission-mode");
+    });
+  });
 });
 
 describe("streaming", () => {

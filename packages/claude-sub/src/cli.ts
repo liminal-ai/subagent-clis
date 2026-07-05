@@ -4,7 +4,12 @@ import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { generateRunId, getSessionsRoot, getSessionDir } from "./paths.js";
-import { getPromptAndPassthrough, getRunnerPassthrough } from "./argv.js";
+import {
+  extractDirFromArgv,
+  getPromptAndPassthrough,
+  getRunnerPassthrough,
+  validateDirFromArgv,
+} from "./argv.js";
 import { readPromptFromFile, resolvePrompt, PROMPT_STDIN } from "./prompt.js";
 import { claudeExists, runSession, spawnDetachedRunner } from "./runner.js";
 import {
@@ -44,7 +49,11 @@ interface GlobalOpts {
 const RUNNER_START_GRACE_MS = 5_000;
 
 function sessionsRoot(opts: GlobalOpts): string {
-  return getSessionsRoot(opts.dir);
+  const dirError = validateDirFromArgv();
+  if (dirError) {
+    printErrorJson(dirError);
+  }
+  return getSessionsRoot(extractDirFromArgv() ?? opts.dir);
 }
 
 function printJson(value: unknown): void {
@@ -105,8 +114,34 @@ function finishResult(envelope: Envelope): never {
   process.exit(0);
 }
 
-function filterPassthrough(args: string[]): string[] {
-  return args.filter((arg) => arg !== PROMPT_STDIN);
+function filterPassthrough(
+  args: string[],
+  promptWasStdin: boolean,
+  afterDoubleDash: boolean,
+): string[] {
+  if (!promptWasStdin || afterDoubleDash) {
+    return args;
+  }
+  let removedStdinMarker = false;
+  return args.filter((arg) => {
+    if (!removedStdinMarker && arg === PROMPT_STDIN) {
+      removedStdinMarker = true;
+      return false;
+    }
+    return true;
+  });
+}
+
+function parseListLimit(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^-?\d+$/.test(trimmed)) {
+    return null;
+  }
+  const limit = Number.parseInt(trimmed, 10);
+  if (limit < 0) {
+    return null;
+  }
+  return limit;
 }
 
 function runScope(cmd: Command): RunScopeOptions {
@@ -208,9 +243,12 @@ program
   .action(async function (this: Command) {
     const opts = this.parent?.opts<GlobalOpts>() ?? {};
     const text = this.opts<{ text?: boolean }>().text;
+    const promptInfo = getPromptAndPassthrough("exec");
     const prompt = await requirePrompt("exec");
     const passthrough = filterPassthrough(
-      getPromptAndPassthrough("exec").passthrough,
+      promptInfo.passthrough,
+      promptInfo.prompt === PROMPT_STDIN,
+      promptInfo.afterDoubleDash,
     );
 
     await requireClaude();
@@ -239,9 +277,12 @@ program
   .option("--prompt-file <path>", "read prompt from file")
   .action(async function (this: Command) {
     const opts = this.parent?.opts<GlobalOpts>() ?? {};
+    const promptInfo = getPromptAndPassthrough("start");
     const prompt = await requirePrompt("start");
     const passthrough = filterPassthrough(
-      getPromptAndPassthrough("start").passthrough,
+      promptInfo.passthrough,
+      promptInfo.prompt === PROMPT_STDIN,
+      promptInfo.afterDoubleDash,
     );
 
     await requireClaude();
@@ -301,7 +342,7 @@ program
     const root = sessionsRoot(opts);
     const sessionDir = await requireSessionDir(root, runId, runScope(this));
 
-    if (cmdOpts.wait) {
+    if (cmdOpts.wait || cmdOpts.timeout !== undefined) {
       const waited = await waitForEnvelope(sessionDir, cmdOpts.timeout);
       if (!waited.done) {
         if (waited.reason === "timeout") {
@@ -394,7 +435,10 @@ program
   .action(async function (this: Command) {
     const opts = this.parent?.opts<GlobalOpts>() ?? {};
     const cmdOpts = this.opts<{ limit: string }>();
-    const limit = Number.parseInt(cmdOpts.limit, 10) || 10;
+    const limit = parseListLimit(cmdOpts.limit);
+    if (limit === null) {
+      printErrorJson("list -n requires a non-negative integer");
+    }
     const root = sessionsRoot(opts);
     const runs = await listRuns(root, limit, runScope(this));
     printJsonl(runs);
@@ -441,7 +485,7 @@ program
       runId: string;
       cwd?: string;
     }>();
-    const passthrough = filterPassthrough(getRunnerPassthrough());
+    const passthrough = filterPassthrough(getRunnerPassthrough(), false, false);
 
     let prompt: string;
     if (cmdOpts.promptFile) {

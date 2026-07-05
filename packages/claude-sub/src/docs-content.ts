@@ -57,7 +57,7 @@ EXIT CODES
   1  usage / CLI error (includes missing claude)
   2  subagent run failed (envelope.status == "error")
   3  result not ready (result while still running, no --wait)
-  4  wait timeout (result --wait --timeout exceeded)
+  4  wait timeout (result --timeout implies --wait; exceeded deadline)
 
 VERSIONING
   schema_version: 1 applies to meta.json, envelope.json, and canonical stream events.

@@ -1,3 +1,19 @@
+function cursorFlagValueSkip(arg: string): number {
+  if (arg.includes("=")) {
+    return 0;
+  }
+  switch (arg) {
+    case "--model":
+    case "-m":
+    case "--mode":
+    case "--sandbox":
+    case "--add-dir":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 export function buildCursorAgentArgs(passthrough: string[]): string[] {
   const args = [...passthrough];
   let hasModel = false;
@@ -7,7 +23,7 @@ export function buildCursorAgentArgs(passthrough: string[]): string[] {
   let readonlyMode = false;
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+    const arg = args[i]!;
     if (arg === "--model" || arg === "-m") {
       hasModel = true;
     } else if (arg.startsWith("--model=")) {
@@ -27,6 +43,11 @@ export function buildCursorAgentArgs(passthrough: string[]): string[] {
       }
     } else if (arg === "--mode=plan" || arg === "--mode=ask") {
       readonlyMode = true;
+    }
+
+    const valueSkip = cursorFlagValueSkip(arg);
+    if (valueSkip > 0) {
+      i += valueSkip;
     }
   }
 

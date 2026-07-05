@@ -1,3 +1,25 @@
+function claudeFlagValueSkip(arg: string): number {
+  if (arg.includes("=")) {
+    return 0;
+  }
+  switch (arg) {
+    case "--output-format":
+    case "--permission-mode":
+    case "--allowedTools":
+    case "--allowed-tools":
+    case "--model":
+    case "-m":
+    case "--append-system-prompt":
+    case "--append-system-prompt-file":
+    case "--add-dir":
+    case "--resume":
+    case "--max-turns":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 export function buildClaudeExecArgs(passthrough: string[]): string[] {
   const args = [...passthrough];
   let hasPrint = false;
@@ -27,6 +49,11 @@ export function buildClaudeExecArgs(passthrough: string[]): string[] {
       hasAllowedTools = true;
     } else if (arg.startsWith("--allowedTools=") || arg.startsWith("--allowed-tools=")) {
       hasAllowedTools = true;
+    }
+
+    const valueSkip = claudeFlagValueSkip(arg);
+    if (valueSkip > 0) {
+      i += valueSkip;
     }
   }
 

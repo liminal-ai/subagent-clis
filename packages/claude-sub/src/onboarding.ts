@@ -27,7 +27,7 @@ COMMANDS
       flags follow after -.
     status [run_id] [--all]         Cheap poll: running, event count, envelope presence.
     result [run_id] [--wait]        Print envelope.json. Exit 3 if still running;
-          [--timeout <sec>] [--all]  --wait blocks, polling every 500ms.
+          [--timeout <sec>] [--all]  --timeout implies --wait; blocks, polling every 500ms.
     last [run_id] [--all]           Final assistant message, plain text.
   Inspection:
     messages [run_id] [--all]       All assistant messages, ---separated.

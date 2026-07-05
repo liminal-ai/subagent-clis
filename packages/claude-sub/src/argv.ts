@@ -2,9 +2,69 @@ import process from "node:process";
 
 type CommandName = "exec" | "start" | "_runner" | "result" | "list";
 
-function skipWidth(arg: string, commandName: CommandName): number {
+function skipDirWidth(arg: string): number {
   if (arg === "--dir") {
     return 2;
+  }
+  if (arg.startsWith("--dir=")) {
+    return 1;
+  }
+  return 0;
+}
+
+export function validateDirFromArgv(argv: string[] = process.argv): string | null {
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--") {
+      break;
+    }
+    if (arg === "--dir") {
+      const next = argv[i + 1];
+      if (next === undefined || next === "--") {
+        return "--dir requires a path";
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--dir=")) {
+      if (!arg.slice("--dir=".length)) {
+        return "--dir requires a path";
+      }
+    }
+  }
+  return null;
+}
+
+export function extractDirFromArgv(argv: string[] = process.argv): string | undefined {
+  let dir: string | undefined;
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--") {
+      break;
+    }
+    const skip = skipDirWidth(arg);
+    if (skip === 2) {
+      const next = argv[i + 1];
+      if (next && next !== "--") {
+        dir = next;
+        i += 1;
+      }
+      continue;
+    }
+    if (skip === 1) {
+      const value = arg.slice("--dir=".length);
+      if (value) {
+        dir = value;
+      }
+    }
+  }
+  return dir;
+}
+
+function skipWidth(arg: string, commandName: CommandName): number {
+  const dirSkip = skipDirWidth(arg);
+  if (dirSkip > 0) {
+    return dirSkip;
   }
   if (commandName === "exec" && arg === "--text") {
     return 1;
@@ -44,28 +104,36 @@ function skipWidth(arg: string, commandName: CommandName): number {
 function collectTokensAfterCommand(
   commandName: CommandName,
   skipInitialPositionals = 0,
-): string[] {
+): { tokens: string[]; afterDoubleDash: boolean } {
   const argv = process.argv.slice(2);
   let i = 0;
 
   while (i < argv.length) {
-    if (argv[i] === "--dir") {
-      i += 2;
+    if (argv[i] === "--") {
+      break;
+    }
+    const dirSkip = skipDirWidth(argv[i]!);
+    if (dirSkip > 0) {
+      i += dirSkip;
       continue;
     }
     break;
   }
 
   while (i < argv.length && argv[i] !== commandName) {
-    if (argv[i] === "--dir") {
-      i += 2;
+    if (argv[i] === "--") {
+      break;
+    }
+    const dirSkip = skipDirWidth(argv[i]!);
+    if (dirSkip > 0) {
+      i += dirSkip;
       continue;
     }
     i += 1;
   }
 
   if (i >= argv.length) {
-    return [];
+    return { tokens: [], afterDoubleDash: false };
   }
 
   i += 1;
@@ -77,9 +145,11 @@ function collectTokensAfterCommand(
   }
 
   const tokens: string[] = [];
+  let afterDoubleDash = false;
   while (i < argv.length) {
     const arg = argv[i]!;
     if (arg === "--") {
+      afterDoubleDash = true;
       tokens.push(...argv.slice(i + 1));
       break;
     }
@@ -94,7 +164,7 @@ function collectTokensAfterCommand(
     i += 1;
   }
 
-  return tokens;
+  return { tokens, afterDoubleDash };
 }
 
 function extractPromptFile(commandName: "exec" | "start"): string | undefined {
@@ -102,16 +172,24 @@ function extractPromptFile(commandName: "exec" | "start"): string | undefined {
   let i = 0;
 
   while (i < argv.length) {
-    if (argv[i] === "--dir") {
-      i += 2;
+    if (argv[i] === "--") {
+      break;
+    }
+    const dirSkip = skipDirWidth(argv[i]!);
+    if (dirSkip > 0) {
+      i += dirSkip;
       continue;
     }
     break;
   }
 
   while (i < argv.length && argv[i] !== commandName) {
-    if (argv[i] === "--dir") {
-      i += 2;
+    if (argv[i] === "--") {
+      break;
+    }
+    const dirSkip = skipDirWidth(argv[i]!);
+    if (dirSkip > 0) {
+      i += dirSkip;
       continue;
     }
     i += 1;
@@ -142,8 +220,8 @@ function extractPromptFile(commandName: "exec" | "start"): string | undefined {
 
 export function getPromptAndPassthrough(
   commandName: "exec" | "start",
-): { prompt: string; promptFile?: string; passthrough: string[] } {
-  const tokens = collectTokensAfterCommand(commandName);
+): { prompt: string; promptFile?: string; passthrough: string[]; afterDoubleDash: boolean } {
+  const { tokens, afterDoubleDash } = collectTokensAfterCommand(commandName);
   const promptFile = extractPromptFile(commandName);
   let prompt = tokens[0] ?? "";
   let passthrough = tokens.slice(1);
@@ -161,9 +239,10 @@ export function getPromptAndPassthrough(
     prompt,
     promptFile,
     passthrough,
+    afterDoubleDash,
   };
 }
 
 export function getRunnerPassthrough(): string[] {
-  return collectTokensAfterCommand("_runner", 1);
+  return collectTokensAfterCommand("_runner", 1).tokens;
 }

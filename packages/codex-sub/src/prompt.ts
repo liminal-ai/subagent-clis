@@ -53,7 +53,7 @@ export async function readPromptFromFile(
 export async function resolvePrompt(
   commandName: "exec" | "start",
 ): Promise<string | { error: string; [key: string]: unknown }> {
-  const { prompt: positional, promptFile, passthrough } =
+  const { prompt: positional, promptFile, passthrough, afterDoubleDash } =
     getPromptAndPassthrough(commandName);
 
   const hasPositional = positional !== "";
@@ -66,7 +66,7 @@ export async function resolvePrompt(
     };
   }
 
-  if (hasInlinePrompt && passthrough.includes(PROMPT_STDIN)) {
+  if (hasInlinePrompt && passthrough.includes(PROMPT_STDIN) && !afterDoubleDash) {
     return {
       error:
         "ambiguous prompt: provide either a positional prompt or - (stdin), not both" +
