@@ -25,7 +25,7 @@ SESSION DIRECTORY
 FILES (one directory per run)
   meta.json      Written at spawn. schema_version, run_id, backend:"codex", cwd,
                  model, argv (full codex argv), prompt, started_at.
-  raw.jsonl      Verbatim codex --json lines, appended as received.
+  raw.jsonl      Verbatim codex stdout lines, appended as received.
   stream.jsonl   Canonical mapped events (see docs events), appended live with ts.
   stderr.log     codex stderr; detached runner bootstrap errors also here.
   pid            Runner process PID (codex-subagent worker, not codex child).

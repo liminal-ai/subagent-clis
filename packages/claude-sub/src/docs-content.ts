@@ -25,7 +25,7 @@ SESSION DIRECTORY
 FILES (one directory per run)
   meta.json      Written at spawn. schema_version, run_id, backend:"claude", cwd,
                  model, argv (full claude argv), prompt, started_at.
-  raw.jsonl      Verbatim claude stream-json lines, appended as received.
+  raw.jsonl      Verbatim claude stdout lines, appended as received.
   stream.jsonl   Canonical mapped events (see docs events), appended live with ts.
   stderr.log     claude stderr; detached runner bootstrap errors also here.
   pid            Runner process PID (claude-subagent worker, not claude child).
@@ -111,7 +111,7 @@ CANONICAL EVENT TYPES
   other        t, raw_type, data, ts
 
 RAW.JSONL
-  Verbatim claude stream-json stdout, one JSON object per line.
+  Verbatim claude stdout, one line per backend write (JSON events and any other output).
   Key raw selectors:
     session_id:  .type=="system" and .subtype=="init" | .session_id
     messages:    .type=="assistant" | .message.content[] | select(.type=="text") | .text

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { open, writeFile } from "node:fs/promises";
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,23 +32,45 @@ import type { Envelope } from "./envelope.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export async function codexExists(): Promise<boolean> {
-  const bin = process.env.CODEX_BIN ?? "codex";
-  if (process.env.CODEX_BIN) {
-    return true;
-  }
+async function overrideBinExecutable(bin: string): Promise<boolean> {
   try {
+    const info = await stat(bin);
+    if (info.isDirectory()) {
+      return false;
+    }
+    if (bin.endsWith(".mjs") || bin.endsWith(".js")) {
+      if (!info.isFile()) {
+        return false;
+      }
+      await access(bin, constants.R_OK);
+      return true;
+    }
+    if (!info.isFile()) {
+      return false;
+    }
     await access(bin, constants.X_OK);
     return true;
   } catch {
-    return new Promise((resolve) => {
-      const child = spawn("sh", ["-c", `command -v ${bin}`], {
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      child.on("close", (code) => resolve(code === 0));
-      child.on("error", () => resolve(false));
-    });
+    return false;
   }
+}
+
+function commandOnPath(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("sh", ["-c", `command -v ${bin}`], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.on("close", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}
+
+export async function codexExists(): Promise<boolean> {
+  const bin = process.env.CODEX_BIN ?? "codex";
+  if (process.env.CODEX_BIN) {
+    return overrideBinExecutable(bin);
+  }
+  return commandOnPath(bin);
 }
 
 function resolveCodexSpawn(
@@ -72,12 +94,12 @@ async function processRawLine(
   line: string,
   state: StreamState,
 ): Promise<void> {
+  await appendRawLine(sessionDir, line);
+
   const sanitized = sanitizeJsonLine(line);
   if (!sanitized) {
     return;
   }
-
-  await appendRawLine(sessionDir, sanitized);
 
   let raw: Record<string, unknown>;
   try {

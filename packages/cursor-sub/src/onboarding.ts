@@ -45,7 +45,7 @@ SESSION DIRECTORY
   storage only — this does not choose where the run executes).
   Files per run:
     meta.json       Prompt, full argv, cwd, model, started_at. Written at spawn.
-    raw.jsonl       Verbatim cursor-agent stream-json events, appended live.
+    raw.jsonl       Verbatim cursor-agent stdout lines, appended live.
     stream.jsonl    Canonical mapped events, each with ts, appended live.
     stderr.log      cursor-agent stderr; runner bootstrap errors land here too.
     pid             Runner process PID while in flight.

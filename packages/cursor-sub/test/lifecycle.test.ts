@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runCli, withTempSessions, waitForEnvelope, waitForRunning } from "./helpers.js";
 
 const sleepStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-sleep.mjs");
+const heldStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-held.mjs");
 
 async function exitedPid(): Promise<number> {
   const child = spawn(process.execPath, ["-e", ""]);
@@ -57,21 +58,31 @@ describe("start/status/result lifecycle", () => {
 
   it("result exits 3 while running", async () => {
     await withTempSessions(async (sessionsRoot) => {
+      const sentinel = join(sessionsRoot, "release-held");
+      const env = {
+        CURSOR_SUB_HOME: sessionsRoot,
+        CURSOR_AGENT_BIN: heldStub,
+        STUB_RELEASE_FILE: sentinel,
+      };
       const start = await runCli(
-        ["--dir", sessionsRoot, "start", "slow"],
-        { CURSOR_SUB_HOME: sessionsRoot },
+        ["--dir", sessionsRoot, "start", "held"],
+        env,
       );
       expect(start.code).toBe(0);
       const started = JSON.parse(start.stdout.trim());
 
-      const result = await runCli(
-        ["--dir", sessionsRoot, "result", started.run_id],
-        { CURSOR_SUB_HOME: sessionsRoot },
-      );
+      try {
+        await waitForRunning(sessionsRoot, started.run_id, env);
 
-      expect([0, 1, 3]).toContain(result.code);
-      if (result.code === 3) {
+        const result = await runCli(
+          ["--dir", sessionsRoot, "result", started.run_id],
+          env,
+        );
+        expect(result.code).toBe(3);
         expect(JSON.parse(result.stdout.trim())).toEqual({ running: true });
+      } finally {
+        await writeFile(sentinel, "go");
+        await waitForEnvelope(sessionsRoot, started.run_id);
       }
     });
   });
@@ -96,10 +107,11 @@ describe("start/status/result lifecycle", () => {
 
   it("start writes an error envelope when backend spawn fails", async () => {
     await withTempSessions(async (sessionsRoot) => {
-      const missingBin = join(sessionsRoot, "missing-cursor-agent");
+      const badBin = join(sessionsRoot, "bad-backend");
+      await writeFile(badBin, "not-a-valid-executable\n", { mode: 0o755 });
       const env = {
         CURSOR_SUB_HOME: sessionsRoot,
-        CURSOR_AGENT_BIN: missingBin,
+        CURSOR_AGENT_BIN: badBin,
       };
       const start = await runCli(
         ["--dir", sessionsRoot, "start", "spawn failure"],
@@ -115,7 +127,7 @@ describe("start/status/result lifecycle", () => {
       );
       expect(envelope.status).toBe("error");
       expect(envelope.exit_code).not.toBe(0);
-      expect(envelope.error).toContain("ENOENT");
+      expect(envelope.error).toBeTruthy();
     });
   });
 

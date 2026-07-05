@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runCli, withTempSessions } from "./helpers.js";
 
 const failStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-fail.mjs");
 const isErrorStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-is-error.mjs");
+const warningStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-warning.mjs");
+const ansiStub = join(import.meta.dirname, "fixtures", "stub-cursor-agent-ansi.mjs");
 
 describe("exec", () => {
   beforeAll(() => {
@@ -94,12 +96,13 @@ describe("exec", () => {
 
   it("writes an error envelope when backend spawn fails", async () => {
     await withTempSessions(async (sessionsRoot) => {
-      const missingBin = join(sessionsRoot, "missing-cursor-agent");
+      const badBin = join(sessionsRoot, "bad-backend");
+      await writeFile(badBin, "not-a-valid-executable\n", { mode: 0o755 });
       const { stdout, stderr, code } = await runCli(
         ["--dir", sessionsRoot, "exec", "spawn failure"],
         {
           CURSOR_SUB_HOME: sessionsRoot,
-          CURSOR_AGENT_BIN: missingBin,
+          CURSOR_AGENT_BIN: badBin,
         },
       );
 
@@ -107,14 +110,74 @@ describe("exec", () => {
       const envelope = JSON.parse(stdout.trim());
       expect(envelope.status).toBe("error");
       expect(envelope.exit_code).not.toBe(0);
-      expect(envelope.error).toContain("ENOENT");
-      expect(stderr).toContain("ENOENT");
+      expect(envelope.error).toBeTruthy();
+      expect(stderr).toBeTruthy();
       expect(stderr).not.toContain("    at ");
 
       const onDisk = JSON.parse(
         await readFile(join(sessionsRoot, envelope.run_id, "envelope.json"), "utf8"),
       );
       expect(onDisk).toEqual(envelope);
+    });
+  });
+
+  it("rejects CURSOR_AGENT_BIN pointing at a directory", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const badBin = join(sessionsRoot, "bin-dir");
+      await mkdir(badBin);
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "test"],
+        { CURSOR_SUB_HOME: sessionsRoot, CURSOR_AGENT_BIN: badBin },
+      );
+      expect(code).toBe(1);
+      expect(JSON.parse(stdout.trim()).error).toContain("not found");
+    });
+  });
+
+  it("appends non-JSON stdout lines to raw.jsonl verbatim", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "warning test"],
+        {
+          CURSOR_SUB_HOME: sessionsRoot,
+          CURSOR_AGENT_BIN: warningStub,
+        },
+      );
+
+      expect(code).toBe(0);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.status).toBe("ok");
+
+      const rawText = await readFile(envelope.raw_path, "utf8");
+      expect(rawText).toContain("WARNING: experimental feature enabled");
+    });
+  });
+
+  it("maps ANSI-prefixed JSON to canonical events while keeping raw verbatim", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "ansi test"],
+        {
+          CURSOR_SUB_HOME: sessionsRoot,
+          CURSOR_AGENT_BIN: ansiStub,
+        },
+      );
+
+      expect(code).toBe(0);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.status).toBe("ok");
+      expect(envelope.result).toBe("ANSI prefix handled.");
+
+      const rawText = await readFile(envelope.raw_path, "utf8");
+      expect(rawText).toContain("\x1b[33m");
+
+      const streamText = await readFile(envelope.stream_path, "utf8");
+      const lifecycle = streamText
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .find((evt) => evt.t === "lifecycle" && evt.event === "start");
+      expect(lifecycle).toBeTruthy();
     });
   });
 });

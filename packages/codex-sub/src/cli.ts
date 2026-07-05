@@ -14,11 +14,10 @@ import { validateResumePassthrough } from "./args.js";
 import { readPromptFromFile, resolvePrompt, PROMPT_STDIN } from "./prompt.js";
 import { codexExists, runSession, spawnDetachedRunner } from "./runner.js";
 import {
-  countStreamEvents,
   ensureSessionDir,
   getPid,
-  getLastEventTs,
   isSessionRunning,
+  readStreamStats,
   readAssistantMessages,
   readEnvelope,
   readToolEvents,
@@ -327,8 +326,7 @@ program
 
     const id = runId ?? sessionDir.split("/").pop()!;
     const running = await isSessionRunning(sessionDir);
-    const events = await countStreamEvents(sessionDir);
-    const lastEventTs = await getLastEventTs(sessionDir);
+    const { count: events, lastEventTs } = await readStreamStats(sessionDir);
     const hasEnvelope = (await readEnvelope(sessionDir)) !== null;
 
     printJson({

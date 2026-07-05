@@ -1,13 +1,60 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
+import process from "node:process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(__dirname, "..");
 const cliPath = join(packageRoot, "dist", "cli.js");
 const stubCodex = join(__dirname, "fixtures", "stub-codex.mjs");
+
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function anySessionPidRunning(sessionsRoot: string): Promise<boolean> {
+  let entries: string[];
+  try {
+    entries = await readdir(sessionsRoot);
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const pidPath = join(sessionsRoot, entry, "pid");
+    try {
+      const text = await readFile(pidPath, "utf8");
+      const pid = Number.parseInt(text.trim(), 10);
+      if (Number.isFinite(pid) && isPidRunning(pid)) {
+        return true;
+      }
+    } catch {
+      // no pid file or unreadable
+    }
+  }
+
+  return false;
+}
+
+async function waitForSessionsIdle(
+  sessionsRoot: string,
+  deadlineMs = 3_000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    if (!(await anySessionPidRunning(sessionsRoot))) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 export async function withTempSessions(
   fn: (sessionsRoot: string) => Promise<void>,
@@ -16,7 +63,7 @@ export async function withTempSessions(
   try {
     await fn(dir);
   } finally {
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForSessionsIdle(dir);
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }

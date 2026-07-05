@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runCli, withTempSessions } from "./helpers.js";
 
 const failStub = join(import.meta.dirname, "fixtures", "stub-codex-fail.mjs");
+const warningStub = join(import.meta.dirname, "fixtures", "stub-codex-warning.mjs");
 
 describe("exec", () => {
   it("writes a correct envelope", async () => {
@@ -86,12 +87,13 @@ describe("exec", () => {
 
   it("writes an error envelope when backend spawn fails", async () => {
     await withTempSessions(async (sessionsRoot) => {
-      const missingBin = join(sessionsRoot, "missing-codex");
+      const badBin = join(sessionsRoot, "bad-backend");
+      await writeFile(badBin, "not-a-valid-executable\n", { mode: 0o755 });
       const { stdout, stderr, code } = await runCli(
         ["--dir", sessionsRoot, "exec", "spawn failure"],
         {
           CODEX_SUB_HOME: sessionsRoot,
-          CODEX_BIN: missingBin,
+          CODEX_BIN: badBin,
         },
       );
 
@@ -99,14 +101,46 @@ describe("exec", () => {
       const envelope = JSON.parse(stdout.trim());
       expect(envelope.status).toBe("error");
       expect(envelope.exit_code).not.toBe(0);
-      expect(envelope.error).toContain("ENOENT");
-      expect(stderr).toContain("ENOENT");
+      expect(envelope.error).toBeTruthy();
+      expect(stderr).toBeTruthy();
       expect(stderr).not.toContain("    at ");
 
       const onDisk = JSON.parse(
         await readFile(join(sessionsRoot, envelope.run_id, "envelope.json"), "utf8"),
       );
       expect(onDisk).toEqual(envelope);
+    });
+  });
+
+  it("rejects CODEX_BIN pointing at a directory", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const badBin = join(sessionsRoot, "bin-dir");
+      await mkdir(badBin);
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "test"],
+        { CODEX_SUB_HOME: sessionsRoot, CODEX_BIN: badBin },
+      );
+      expect(code).toBe(1);
+      expect(JSON.parse(stdout.trim()).error).toContain("not found");
+    });
+  });
+
+  it("appends non-JSON stdout lines to raw.jsonl verbatim", async () => {
+    await withTempSessions(async (sessionsRoot) => {
+      const { stdout, code } = await runCli(
+        ["--dir", sessionsRoot, "exec", "warning test"],
+        {
+          CODEX_SUB_HOME: sessionsRoot,
+          CODEX_BIN: warningStub,
+        },
+      );
+
+      expect(code).toBe(0);
+      const envelope = JSON.parse(stdout.trim());
+      expect(envelope.status).toBe("ok");
+
+      const rawText = await readFile(envelope.raw_path, "utf8");
+      expect(rawText).toContain("WARNING: rate limit approaching");
     });
   });
 });

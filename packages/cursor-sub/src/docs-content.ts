@@ -25,7 +25,7 @@ SESSION DIRECTORY
 FILES (one directory per run)
   meta.json      Written at spawn. schema_version, run_id, backend:"cursor", cwd,
                  model, argv (full cursor-agent argv), prompt, started_at.
-  raw.jsonl      Verbatim cursor-agent stream-json lines, appended as received.
+  raw.jsonl      Verbatim cursor-agent stdout lines, appended as received.
   stream.jsonl   Canonical mapped events (see docs events), appended live with ts.
   stderr.log     cursor-agent stderr; detached runner bootstrap errors also here.
   pid            Runner process PID (cursor-subagent worker, not cursor-agent child).
@@ -113,7 +113,7 @@ EVENT TYPES
     Fallback for any unmapped raw event type. Preserves full raw payload in data.
 
 RAW.JSONL
-  Verbatim cursor-agent stream-json after stripping non-JSON noise.
+  Verbatim cursor-agent stdout, one line per backend write (ANSI and all other bytes preserved).
   Key raw selectors (for cross-reference):
     assistant text:  .type=="assistant" | .message.content[] | select(.type=="text")
     session_id:      .type=="result" | .session_id

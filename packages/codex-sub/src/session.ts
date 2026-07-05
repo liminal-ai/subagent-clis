@@ -6,7 +6,7 @@ import {
   writeFile,
   appendFile,
 } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { sessionFilePaths } from "./paths.js";
@@ -83,34 +83,61 @@ export async function isSessionRunning(sessionDir: string): Promise<boolean> {
   return isProcessRunning(pid);
 }
 
-export async function countStreamEvents(sessionDir: string): Promise<number> {
+export async function readStreamStats(
+  sessionDir: string,
+): Promise<{ count: number; lastEventTs: string | null }> {
   const paths = sessionFilePaths(sessionDir);
   if (!existsSync(paths.stream)) {
-    return 0;
+    return { count: 0, lastEventTs: null };
   }
-  const text = await readFile(paths.stream, "utf8");
-  if (!text) {
-    return 0;
-  }
-  return text.split("\n").filter((line) => line.trim().length > 0).length;
+
+  return new Promise((resolve, reject) => {
+    let count = 0;
+    let lastLine = "";
+    let pending = "";
+
+    const stream = createReadStream(paths.stream, { encoding: "utf8" });
+
+    stream.on("data", (chunk: string | Buffer) => {
+      const text = pending + (typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+      const lines = text.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.trim().length > 0) {
+          count += 1;
+          lastLine = line;
+        }
+      }
+    });
+
+    stream.on("end", () => {
+      if (pending.trim().length > 0) {
+        count += 1;
+        lastLine = pending;
+      }
+      let lastEventTs: string | null = null;
+      if (lastLine) {
+        try {
+          lastEventTs = (JSON.parse(lastLine) as { ts?: string }).ts ?? null;
+        } catch {
+          lastEventTs = null;
+        }
+      }
+      resolve({ count, lastEventTs });
+    });
+
+    stream.on("error", reject);
+  });
+}
+
+export async function countStreamEvents(sessionDir: string): Promise<number> {
+  const { count } = await readStreamStats(sessionDir);
+  return count;
 }
 
 export async function getLastEventTs(sessionDir: string): Promise<string | null> {
-  const paths = sessionFilePaths(sessionDir);
-  if (!existsSync(paths.stream)) {
-    return null;
-  }
-  const text = await readFile(paths.stream, "utf8");
-  const lines = text.split("\n").filter((line) => line.trim().length > 0);
-  if (lines.length === 0) {
-    return null;
-  }
-  try {
-    const last = JSON.parse(lines[lines.length - 1]!) as { ts?: string };
-    return last.ts ?? null;
-  } catch {
-    return null;
-  }
+  const { lastEventTs } = await readStreamStats(sessionDir);
+  return lastEventTs;
 }
 
 export interface RunScopeOptions {

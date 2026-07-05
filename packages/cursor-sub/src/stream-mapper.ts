@@ -232,8 +232,12 @@ export function mapRawEvent(
   return events;
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07)/g, "");
+}
+
 export function sanitizeJsonLine(line: string): string | null {
-  const trimmed = line.trim();
+  const trimmed = stripAnsi(line).trim();
   if (!trimmed.startsWith("{")) {
     return null;
   }
