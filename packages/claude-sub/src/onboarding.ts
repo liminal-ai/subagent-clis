@@ -33,7 +33,9 @@ COMMANDS
     messages [run_id] [--all]       All assistant messages, ---separated.
     tools [run_id] [--all]          tool_call/tool_result events as JSONL.
     list [-n 10] [--all]            Recent runs for this directory, one JSON line each.
-    stop <run_id>                   SIGTERM the runner; writes error envelope on stop.
+    stop <run_id>                   SIGTERM the runner; envelope gets status "error",
+                                    exit_code 1, error "run was stopped" (distinguishes
+                                    a stop from a real failure).
     docs [topic]                    Embedded deep docs: schema | events | examples.
   Omit run_id to target the latest run IN THIS DIRECTORY; --all targets machine-wide.
 

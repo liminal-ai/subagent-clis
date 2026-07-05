@@ -33,7 +33,9 @@ COMMANDS
     messages [run_id] [--all]       All assistant messages, ---separated.
     tools [run_id] [--all]          tool_call/tool_result events as JSONL.
     list [-n 10] [--all]            Recent runs for this directory, one JSON line each.
-    stop <run_id>                   SIGTERM the runner; writes error envelope on stop.
+    stop <run_id>                   SIGTERM the runner; envelope gets status "error",
+                                    exit_code 1, error "run was stopped" (distinguishes
+                                    a stop from a real failure).
     docs [topic]                    Embedded deep docs: schema | events | examples.
   Omit run_id to target the latest run IN THIS DIRECTORY; --all targets machine-wide.
 
@@ -56,6 +58,7 @@ ENVELOPE FIELDS
   usage (verbatim from cursor or null), duration_ms, started_at, ended_at,
   stream_path, raw_path, stderr_path, error (last 2KB stderr, on failure only).
   Pass session_id to --resume for follow-up runs; each gets a new run_id and dir.
+  model is a display name (e.g. "Composer 2.5") — NOT valid as a --model value.
   Field-by-field contract and model-value notes: docs schema.
 
 EXECUTION PROFILE
